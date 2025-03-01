@@ -1,91 +1,143 @@
+use axum::{
+    extract::Query,
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use chrono::{NaiveDate, NaiveDateTime};
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Server};
+use hyper::{Body, Client, Request};
 use hyper_tls::HttpsConnector;
-use std::convert::Infallible;
+use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// Configuration for the proxy
-struct ProxyConfig {
-    target_url: String,
+// Query parameters struct using Serde for extraction
+#[derive(Deserialize)]
+struct Params {
+    url: Option<String>,
 }
 
-async fn proxy_handler(
-    req: Request<Body>,
-    config: Arc<Mutex<ProxyConfig>>,
-) -> Result<Response<Body>, hyper::Error> {
-    // Get the target URL from the configuration
-    let config = config.lock().await;
-    let target_url = &config.target_url;
+// Configuration for the proxy
+struct ProxyConfig {
+    default_url: String,
+}
 
-    // Create a new request to forward to the target
-    let uri = format!(
-        "{}{}",
-        target_url,
-        req.uri().path_and_query().map_or("", |p| p.as_str())
-    );
+// Generate the static HTML page
+fn generate_html() -> String {
+    include_str!("./index.html").to_string()
+}
+
+async fn handle_request(
+    Query(params): Query<Params>,
+    config: Arc<Mutex<ProxyConfig>>,
+) -> impl IntoResponse {
+    // If no URL is provided, return the static HTML page
+    if params.url.is_none() {
+        return Html(generate_html()).into_response();
+    }
+
+    // Get the target URL from the query parameter or config
+    let target_url = if let Some(url) = params.url {
+        url
+    } else {
+        // This shouldn't happen due to earlier check, but just in case
+        let config = config.lock().await;
+        config.default_url.clone()
+    };
+
+    // Validate the URL
+    if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid URL. Must start with http:// or https://",
+        )
+            .into_response();
+    }
 
     // Set up HTTPS client
     let https = HttpsConnector::new();
     let client = Client::builder().build::<_, hyper::Body>(https);
 
-    // Create the forwarded request
-    let (parts, body) = req.into_parts();
-    let mut builder = Request::builder().method(parts.method).uri(uri);
-
-    // Copy headers from original request
-    for (name, value) in parts.headers {
-        if let Some(name) = name {
-            if name == "host" {
-                continue;
-            }
-            builder = builder.header(name, value);
+    // Create the request to forward
+    let forward_req = match Request::builder().uri(&target_url).body(Body::empty()) {
+        Ok(req) => req,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid URL format").into_response();
         }
-    }
+    };
 
     // Forward the request
-    let forward_req = builder.body(body).unwrap();
-    println!("{:?}", &forward_req);
-    let res = client.request(forward_req).await?;
+    match client.request(forward_req).await {
+        Ok(res) => {
+            // Extract status and headers
+            let status = res.status();
+            let headers = res.headers().clone();
 
-    // Extract status and headers
-    let status = res.status();
-    let headers = res.headers().clone();
+            // Check if the response is calendar data
+            let is_calendar = headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map_or(false, |s| s.contains("text/calendar"));
 
-    // Check if the response is calendar data
-    if headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map_or(false, |s| s.contains("text/calendar"))
-    {
-        // Get the response body
-        let body_bytes = hyper::body::to_bytes(res.into_body()).await?;
-        let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-        println!("{}", body_str);
+            if is_calendar {
+                // Get the response body
+                match hyper::body::to_bytes(res.into_body()).await {
+                    Ok(body_bytes) => {
+                        let body_str = String::from_utf8_lossy(&body_bytes).to_string();
 
-        // Modify the calendar data
-        let modified_calendar = modify_icalendar(&body_str);
+                        // Modify the calendar data
+                        let modified_calendar = modify_icalendar(&body_str);
 
-        // Return the modified calendar
-        let mut response_builder = Response::builder().status(status);
+                        // Create response
+                        let mut response = Response::builder().status(status);
 
-        // Copy headers
-        for (name, value) in headers.iter() {
-            if name == "content-length" {
-                continue;
+                        // Copy headers
+                        for (name, value) in headers.iter() {
+                            if name == "content-length" {
+                                continue;
+                            }
+                            response = response.header(name, value);
+                        }
+
+                        match response.body(Body::from(modified_calendar)) {
+                            Ok(resp) => resp.into_response(),
+                            Err(_) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Failed to create response",
+                            )
+                                .into_response(),
+                        }
+                    }
+                    Err(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to read response body",
+                    )
+                        .into_response(),
+                }
+            } else {
+                // For non-calendar responses, convert to an axum response
+                let (parts, body) = res.into_parts();
+                let mut response = Response::builder().status(parts.status);
+
+                // Copy headers
+                for (name, value) in parts.headers.iter() {
+                    response = response.header(name, value);
+                }
+
+                match response.body(Body::from(body)) {
+                    Ok(resp) => resp.into_response(),
+                    Err(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to create response",
+                    )
+                        .into_response(),
+                }
             }
-            response_builder = response_builder.header(name, value);
         }
-
-        return Ok(response_builder
-            .body(Body::from(modified_calendar))
-            .unwrap());
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to proxy request").into_response(),
     }
-
-    // For non-calendar responses, just return the original response
-    Ok(res)
 }
 
 fn modify_icalendar(ical_str: &str) -> String {
@@ -162,7 +214,7 @@ fn parse_ical_datetime(dt_str: &str) -> Option<NaiveDateTime> {
         // Date-only format: YYYYMMDD
         if dt_str.len() == 8 {
             if let Ok(date) = NaiveDate::parse_from_str(dt_str, "%Y%m%d") {
-                return Some(date.and_hms_opt(0, 0, 0).expect(""));
+                return Some(date.and_hms(0, 0, 0));
             }
         }
         // Date-time format: YYYYMMDDTHHMMSSz?
@@ -185,34 +237,36 @@ fn parse_ical_datetime(dt_str: &str) -> Option<NaiveDateTime> {
 #[tokio::main]
 async fn main() {
     // Get configuration from environment or use defaults
-    let target_url = std::env::var("TARGET_URL")
-        .unwrap_or_else(|_| "https://example.com/calendar.ics".to_string());
+    let default_url =
+        std::env::var("DEFAULT_URL").unwrap_or_else(|_| "https://example.com/calendar".to_string());
 
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(8060);
+        .unwrap_or(3000);
 
     // Create the configuration
-    let config = Arc::new(Mutex::new(ProxyConfig { target_url }));
+    let config = Arc::new(Mutex::new(ProxyConfig { default_url }));
+
+    // Create a clone for the router
+    let app_config = config.clone();
+
+    // Build our application with the route
+    let app = Router::new().route(
+        "/",
+        get(move |params| handle_request(params, app_config.clone())),
+    );
 
     // Set up the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
-    let config_clone = config.clone();
-    let make_svc = make_service_fn(move |_conn| {
-        let config = config_clone.clone();
-        async move { Ok::<_, Infallible>(service_fn(move |req| proxy_handler(req, config.clone()))) }
-    });
-
-    let server = Server::bind(&addr).serve(make_svc);
-
     println!("iCalendar proxy server running on http://{}", addr);
-    println!("Forwarding requests to {}", config.lock().await.target_url);
-    println!("Converting multi-day events to all-day events");
+    println!("Default URL: {}", config.lock().await.default_url);
+    println!("Use ?url=<calendar-url> to proxy a different calendar");
 
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
-    }
+    // Start the server
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
-

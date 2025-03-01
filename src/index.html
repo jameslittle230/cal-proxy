@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calendar Proxy</title>
+  <link rel="preconnect" href="https://rsms.me/">
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+  <style>
+    body {
+      font-family: Inter, sans-serif;
+      font-feature-settings: 'liga' 1, 'calt' 1, 'tnum' 1, 'ss01' 1, 'ss07' 1, 'zero' 1, 'cv10' 1, 'cv06' 1, 'cv11' 1, 'cv08' 1;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin-top: 0;
+    }
+
+    .container {
+      background-color: #f5f5f5;
+      border-radius: 5px;
+      padding: 20px;
+      margin-top: 20px;
+    }
+
+    form {
+      margin-top: 20px;
+    }
+
+    .form-row {
+      display: flex;
+      width: 100%;
+      gap: 8px;
+
+      &>* {
+        flex-shrink: 0;
+      }
+    }
+
+    input[type="url"] {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      font: inherit;
+      width: 100%;
+      flex-shrink: 1;
+    }
+
+    button {
+      padding: 8px 16px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    button:hover {
+      background-color: #3367d6;
+    }
+
+    code {
+      font-size: inherit;
+      background-color: #e0e0e0;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+
+    .example {
+      margin-top: 20px;
+      background-color: #e8f5e9;
+      padding: 15px;
+      border-radius: 5px;
+    }
+
+    #result {
+      margin-top: 15px;
+
+      &>a {
+        font-size: 0.8em;
+        overflow-wrap: anywhere;
+      }
+    }
+
+    footer {
+      margin-top: 20px;
+      padding-top: 10px;
+      border-top: 1px solid #ccc;
+      color: #4F4F4F;
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Calendar Proxy</h1>
+  <p>This service transforms time-specific multi-day events into clean, easy-to-read all-day events to declutter your
+    calendar view.</p>
+
+  <div>
+    <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+      <!-- Left Calendar: Event with specific times -->
+      <g transform="translate(50, 20)">
+        <!-- Calendar Frame -->
+        <rect x="0" y="0" width="280" height="160" rx="5" fill="#f5f5f5" stroke="#ddd" />
+
+        <!-- Calendar Header -->
+        <rect x="0" y="0" width="280" height="30" rx="5" fill="#4285f4" />
+        <text x="140" y="20" font-family="Inter, sans-serif" font-size="14" fill="white" text-anchor="middle">Calendar
+          with Timed Event</text>
+
+        <!-- Calendar Grid -->
+        <line x1="0" y1="30" x2="280" y2="30" stroke="#ddd" stroke-width="1" />
+        <line x1="70" y1="30" x2="70" y2="160" stroke="#ddd" stroke-width="1" />
+        <line x1="140" y1="30" x2="140" y2="160" stroke="#ddd" stroke-width="1" />
+        <line x1="210" y1="30" x2="210" y2="160" stroke="#ddd" stroke-width="1" />
+
+        <!-- Day labels -->
+        <text x="35" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Mon</text>
+        <text x="105" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Tue</text>
+        <text x="175" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Wed</text>
+        <text x="245" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Thu</text>
+
+        <!-- Multi-day event with specific times across multiple days -->
+        <!-- Monday: 10am to end of day -->
+        <rect x="5" y="80" width="65" height="80" rx="3" fill="#ea4335" fill-opacity="0.8" />
+        <text x="37" y="105" font-family="Inter, sans-serif" font-size="10" fill="white"
+          text-anchor="middle">10am</text>
+        <text x="37" y="120" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">↓</text>
+        <text x="37" y="135" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">End of
+          day</text>
+
+        <!-- Tuesday: All day -->
+        <rect x="75" y="50" width="65" height="110" rx="3" fill="#ea4335" fill-opacity="0.8" />
+        <text x="107" y="105" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">All
+          day</text>
+
+        <!-- Wednesday: All day -->
+        <rect x="145" y="50" width="65" height="110" rx="3" fill="#ea4335" fill-opacity="0.8" />
+        <text x="177" y="105" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">All
+          day</text>
+
+        <!-- Thursday: Beginning of day to 2pm -->
+        <rect x="215" y="50" width="65" height="65" rx="3" fill="#ea4335" fill-opacity="0.8" />
+        <text x="247" y="75" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">Start of
+          day</text>
+        <text x="247" y="90" font-family="Inter, sans-serif" font-size="10" fill="white" text-anchor="middle">↓</text>
+        <text x="247" y="105" font-family="Inter, sans-serif" font-size="10" fill="white"
+          text-anchor="middle">2pm</text>
+      </g>
+
+      <!-- Arrow -->
+      <g transform="translate(370, 100)">
+        <path d="M0,0 L60,0 M50,-10 L60,0 L50,10" fill="none" stroke="#333" stroke-width="2" />
+      </g>
+
+      <!-- Right Calendar: Event as all-day -->
+      <g transform="translate(470, 20)">
+        <!-- Calendar Frame -->
+        <rect x="0" y="0" width="280" height="160" rx="5" fill="#f5f5f5" stroke="#ddd" />
+
+        <!-- Calendar Header -->
+        <rect x="0" y="0" width="280" height="30" rx="5" fill="#4285f4" />
+        <text x="140" y="20" font-family="Inter, sans-serif" font-size="14" fill="white" text-anchor="middle">Calendar
+          with All-Day Event</text>
+
+        <!-- Calendar Grid -->
+        <line x1="0" y1="30" x2="280" y2="30" stroke="#ddd" stroke-width="1" />
+        <line x1="70" y1="30" x2="70" y2="160" stroke="#ddd" stroke-width="1" />
+        <line x1="140" y1="30" x2="140" y2="160" stroke="#ddd" stroke-width="1" />
+        <line x1="210" y1="30" x2="210" y2="160" stroke="#ddd" stroke-width="1" />
+
+        <!-- Day labels -->
+        <text x="35" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Mon</text>
+        <text x="105" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Tue</text>
+        <text x="175" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Wed</text>
+        <text x="245" y="45" font-family="Inter, sans-serif" font-size="12" fill="#333" text-anchor="middle">Thu</text>
+
+        <!-- All-day event -->
+        <rect x="5" y="50" width="275" height="20" rx="3" fill="#34a853" fill-opacity="0.8" />
+        <text x="140" y="65" font-family="Inter, sans-serif" font-size="12" fill="white" text-anchor="middle">All-Day
+          Event (4 days)</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="container">
+    <h2>How to use:</h2>
+    <p>Add the <code>?url=</code> parameter to proxy a webcal feed:</p>
+    <p>
+      <code id="exampleUrl">http://localhost:3000/?url=https://example.com/calendar.ics</code>
+    </p>
+
+    <form action="/" method="get" id="calendarForm">
+      <h3>Try it now:</h3>
+      <div class="form-row">
+        <input type="url" name="url" id="calendarUrl" placeholder="https://example.com/calendar.ics" required>
+        <button type="submit">Convert Calendar</button>
+      </div>
+    </form>
+    <div id="result" style="display: none;">
+      <p>Your converted calendar URL:</p>
+      <a href="#" id="convertedUrl" target="_blank"></a>
+    </div>
+  </div>
+
+  <footer>Made by <a href="https://jameslittle.me">James Little</a></footer>
+
+  <script>
+    // Update example URL with current host
+    document.addEventListener('DOMContentLoaded', function () {
+      const currentHost = window.location.origin;
+      const exampleUrl = document.getElementById('exampleUrl');
+      exampleUrl.textContent = `${currentHost}/?url=https://example.com/calendar.ics`;
+
+      // Also update form action to current URL
+      document.getElementById('calendarForm').action = window.location.pathname;
+    });
+
+    document.getElementById('calendarForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      const calendarUrl = document.getElementById('calendarUrl').value;
+      if (!calendarUrl) return;
+
+      const currentUrl = window.location.origin;
+      const convertedUrl = `${currentUrl}/?url=${encodeURIComponent(calendarUrl)}`;
+
+      const resultElement = document.getElementById('result');
+      const linkElement = document.getElementById('convertedUrl');
+
+      linkElement.href = convertedUrl;
+      linkElement.textContent = convertedUrl;
+      resultElement.style.display = 'block';
+
+      // Optional: copy URL to clipboard
+      navigator.clipboard.writeText(convertedUrl)
+        .then(() => console.log('URL copied to clipboard'))
+        .catch(err => console.error('Failed to copy URL: ', err));
+    });
+  </script>
+</body>
+
+</html>
