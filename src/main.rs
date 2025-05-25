@@ -19,7 +19,9 @@ struct Params {
 
 // Generate the static HTML page
 fn generate_html() -> String {
-    include_str!("./index.html").to_string()
+    return include_str!("./index.html")
+        .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+        .to_string();
 }
 
 async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
