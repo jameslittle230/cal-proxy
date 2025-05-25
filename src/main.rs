@@ -10,8 +10,6 @@ use hyper::{Body, Client, Request};
 use hyper_tls::HttpsConnector;
 use serde::Deserialize;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // Query parameters struct using Serde for extraction
 #[derive(Deserialize)]
@@ -19,33 +17,17 @@ struct Params {
     url: Option<String>,
 }
 
-// Configuration for the proxy
-struct ProxyConfig {
-    default_url: String,
-}
-
 // Generate the static HTML page
 fn generate_html() -> String {
     include_str!("./index.html").to_string()
 }
 
-async fn handle_request(
-    Query(params): Query<Params>,
-    config: Arc<Mutex<ProxyConfig>>,
-) -> impl IntoResponse {
-    // If no URL is provided, return the static HTML page
+async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
     if params.url.is_none() {
         return Html(generate_html()).into_response();
     }
 
-    // Get the target URL from the query parameter or config
-    let target_url = if let Some(url) = params.url {
-        url
-    } else {
-        // This shouldn't happen due to earlier check, but just in case
-        let config = config.lock().await;
-        config.default_url.clone()
-    };
+    let target_url = params.url.unwrap();
 
     // Validate the URL
     if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
@@ -236,33 +218,19 @@ fn parse_ical_datetime(dt_str: &str) -> Option<NaiveDateTime> {
 
 #[tokio::main]
 async fn main() {
-    // Get configuration from environment or use defaults
-    let default_url =
-        std::env::var("DEFAULT_URL").unwrap_or_else(|_| "https://example.com/calendar".to_string());
-
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(3000);
 
-    // Create the configuration
-    let config = Arc::new(Mutex::new(ProxyConfig { default_url }));
-
-    // Create a clone for the router
-    let app_config = config.clone();
-
     // Build our application with the route
-    let app = Router::new().route(
-        "/",
-        get(move |params| handle_request(params, app_config.clone())),
-    );
+    let app = Router::new().route("/", get(move |params| handle_request(params)));
 
     // Set up the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let version = env!("CARGO_PKG_VERSION");
 
-    println!("iCalendar proxy server running on http://{}", addr);
-    println!("Default URL: {}", config.lock().await.default_url);
-    println!("Use ?url=<calendar-url> to proxy a different calendar");
+    println!("cal-proxy server {version} running on http://{addr}");
 
     // Start the server
     axum::Server::bind(&addr)
