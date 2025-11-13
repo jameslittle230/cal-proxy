@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 rust:1.85-slim as builder
+FROM --platform=linux/amd64 rust:1.91-slim AS builder
 
 WORKDIR /usr/src/app
 COPY . .
