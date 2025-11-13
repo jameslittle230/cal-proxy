@@ -274,3 +274,236 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Timelike;
+
+    #[test]
+    fn test_parse_ical_datetime_date_only() {
+        let result = parse_ical_datetime("20240315");
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.date(), NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert_eq!(dt.time().hour(), 0);
+        assert_eq!(dt.time().minute(), 0);
+        assert_eq!(dt.time().second(), 0);
+    }
+
+    #[test]
+    fn test_parse_ical_datetime_with_time() {
+        let result = parse_ical_datetime("20240315T143000");
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.date(), NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert_eq!(dt.time().hour(), 14);
+        assert_eq!(dt.time().minute(), 30);
+        assert_eq!(dt.time().second(), 0);
+    }
+
+    #[test]
+    fn test_parse_ical_datetime_with_time_and_z() {
+        let result = parse_ical_datetime("20240315T143000Z");
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.date(), NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert_eq!(dt.time().hour(), 14);
+        assert_eq!(dt.time().minute(), 30);
+        assert_eq!(dt.time().second(), 0);
+    }
+
+    #[test]
+    fn test_parse_ical_datetime_invalid() {
+        assert!(parse_ical_datetime("").is_none());
+        assert!(parse_ical_datetime("invalid").is_none());
+        assert!(parse_ical_datetime("2024031").is_none());
+    }
+
+    #[test]
+    fn test_modify_icalendar_converts_multiday_events() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240316T120000\r
+SUMMARY:Multi-day Event\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec![]);
+
+        // Should convert to all-day event
+        assert!(result.contains("DTSTART;VALUE=DATE:20240315"));
+        assert!(result.contains("DTEND;VALUE=DATE:20240316"));
+        assert!(result.contains("SUMMARY:Multi-day Event"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_keeps_single_day_events() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:Single Day Event\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec![]);
+
+        // Should NOT convert to all-day (same day)
+        assert!(result.contains("DTSTART:20240315T100000"));
+        assert!(result.contains("DTEND:20240315T120000"));
+        assert!(result.contains("SUMMARY:Single Day Event"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_filters_events_by_summary() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:Meeting with Boss\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+DTSTART:20240316T140000\r
+DTEND:20240316T150000\r
+SUMMARY:Team Standup\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec!["Boss".to_string()]);
+
+        // First event should be filtered out
+        assert!(!result.contains("Meeting with Boss"));
+
+        // Second event should remain
+        assert!(result.contains("Team Standup"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_filters_case_insensitive() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:URGENT Meeting\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec!["urgent".to_string()]);
+
+        // Should filter out despite different case
+        assert!(!result.contains("URGENT Meeting"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_multiple_filters() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+SUMMARY:Personal Appointment\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+SUMMARY:Work Meeting\r
+DTSTART:20240316T140000\r
+DTEND:20240316T150000\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+SUMMARY:Team Lunch\r
+DTSTART:20240317T120000\r
+DTEND:20240317T130000\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(
+            input,
+            vec!["Personal".to_string(), "Work".to_string()],
+        );
+
+        // First two events should be filtered
+        assert!(!result.contains("Personal Appointment"));
+        assert!(!result.contains("Work Meeting"));
+
+        // Third event should remain
+        assert!(result.contains("Team Lunch"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_preserves_vcalendar_structure() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//Test//EN\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:Event\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec![]);
+
+        // Should preserve calendar metadata
+        assert!(result.contains("BEGIN:VCALENDAR"));
+        assert!(result.contains("VERSION:2.0"));
+        assert!(result.contains("PRODID:-//Test//Test//EN"));
+        assert!(result.contains("END:VCALENDAR"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_filters_by_any_field() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:Regular Meeting\r
+LOCATION:Secret Office\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec!["Secret".to_string()]);
+
+        // Should filter based on location field
+        assert!(!result.contains("Regular Meeting"));
+        assert!(!result.contains("Secret Office"));
+    }
+
+    #[test]
+    fn test_modify_icalendar_empty_filters() {
+        let input = "\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+BEGIN:VEVENT\r
+DTSTART:20240315T100000\r
+DTEND:20240315T120000\r
+SUMMARY:Test Event\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+        let result = modify_icalendar(input, vec![]);
+
+        // Should not filter anything
+        assert!(result.contains("Test Event"));
+    }
+}
