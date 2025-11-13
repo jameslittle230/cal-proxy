@@ -1,13 +1,16 @@
 use axum::{
+    Router,
+    body::Body,
     extract::Query,
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
 };
 use chrono::{NaiveDate, NaiveDateTime};
-use hyper::{Body, Client, Request};
+use http_body_util::{BodyExt, Empty};
+use hyper::Request;
 use hyper_tls::HttpsConnector;
+use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use serde::Deserialize;
 use std::net::SocketAddr;
 
@@ -15,6 +18,7 @@ use std::net::SocketAddr;
 #[derive(Deserialize)]
 struct Params {
     url: Option<String>,
+    exclude: Option<String>,
 }
 
 // Generate the static HTML page
@@ -30,6 +34,12 @@ async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
     }
 
     let target_url = params.url.unwrap();
+    let exclusions = params
+        .exclude
+        .unwrap_or_default()
+        .split(",")
+        .map(Into::into)
+        .collect();
 
     // Validate the URL
     if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
@@ -42,10 +52,13 @@ async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
 
     // Set up HTTPS client
     let https = HttpsConnector::new();
-    let client = Client::builder().build::<_, hyper::Body>(https);
+    let client = Client::builder(TokioExecutor::new()).build(https);
 
     // Create the request to forward
-    let forward_req = match Request::builder().uri(&target_url).body(Body::empty()) {
+    let forward_req = match Request::builder()
+        .uri(&target_url)
+        .body(Empty::<bytes::Bytes>::new())
+    {
         Ok(req) => req,
         Err(_) => {
             return (StatusCode::BAD_REQUEST, "Invalid URL format").into_response();
@@ -67,12 +80,13 @@ async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
 
             if is_calendar {
                 // Get the response body
-                match hyper::body::to_bytes(res.into_body()).await {
-                    Ok(body_bytes) => {
+                match res.into_body().collect().await {
+                    Ok(collected) => {
+                        let body_bytes = collected.to_bytes();
                         let body_str = String::from_utf8_lossy(&body_bytes).to_string();
 
                         // Modify the calendar data
-                        let modified_calendar = modify_icalendar(&body_str);
+                        let modified_calendar = modify_icalendar(&body_str, exclusions);
 
                         // Create response
                         let mut response = Response::builder().status(status);
@@ -110,11 +124,22 @@ async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
                     response = response.header(name, value);
                 }
 
-                match response.body(Body::from(body)) {
-                    Ok(resp) => resp.into_response(),
+                // Collect the body and convert it
+                match body.collect().await {
+                    Ok(collected) => {
+                        let body_bytes = collected.to_bytes();
+                        match response.body(Body::from(body_bytes)) {
+                            Ok(resp) => resp.into_response(),
+                            Err(_) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Failed to create response",
+                            )
+                                .into_response(),
+                        }
+                    }
                     Err(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to create response",
+                        "Failed to read response body",
                     )
                         .into_response(),
                 }
@@ -124,7 +149,7 @@ async fn handle_request(Query(params): Query<Params>) -> impl IntoResponse {
     }
 }
 
-fn modify_icalendar(ical_str: &str) -> String {
+fn modify_icalendar(ical_str: &str, filters: Vec<String>) -> String {
     // Use line-by-line processing which works better for iCalendar format
     let mut result = String::new();
     let mut in_event = false;
@@ -143,6 +168,17 @@ fn modify_icalendar(ical_str: &str) -> String {
             dtend_line_idx = None;
         } else if line.starts_with("END:VEVENT") {
             in_event = false;
+
+            let should_skip = event_lines.iter().any(|line| {
+                filters
+                    .iter()
+                    .any(|filter| line.to_lowercase().contains(&filter.to_lowercase()))
+            });
+
+            if should_skip {
+                continue;
+            }
+
             event_lines.push(line.to_string());
 
             // Check if this is a multi-day event that needs conversion
@@ -198,7 +234,7 @@ fn parse_ical_datetime(dt_str: &str) -> Option<NaiveDateTime> {
         // Date-only format: YYYYMMDD
         if dt_str.len() == 8 {
             if let Ok(date) = NaiveDate::parse_from_str(dt_str, "%Y%m%d") {
-                return Some(date.and_hms(0, 0, 0));
+                return date.and_hms_opt(0, 0, 0);
             }
         }
         // Date-time format: YYYYMMDDTHHMMSSz?
@@ -235,8 +271,6 @@ async fn main() {
     println!("cal-proxy server {version} running on http://{addr}");
 
     // Start the server
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
